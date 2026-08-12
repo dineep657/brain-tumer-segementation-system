@@ -14,6 +14,7 @@ CHECKPOINT_PATH = os.path.join("models", "brain_tumor_unet_2d.pth")
 def load_trained_model() -> LightweightUNet2D:
     """
     Loads the trained PyTorch 2D UNet model checkpoint from disk ('models/brain_tumor_unet_2d.pth').
+    Handles both direct state_dict and dict containing 'state_dict' key.
     Sets the model strictly to evaluation mode (eval()) for real inference.
     """
     global _trained_model_instance
@@ -22,7 +23,13 @@ def load_trained_model() -> LightweightUNet2D:
             raise FileNotFoundError(f"Trained model checkpoint missing at: {CHECKPOINT_PATH}")
             
         model = LightweightUNet2D(in_channels=1, out_channels=1)
-        state_dict = torch.load(CHECKPOINT_PATH, map_location=torch.device('cpu'))
+        checkpoint = torch.load(CHECKPOINT_PATH, map_location=torch.device('cpu'))
+        
+        if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        else:
+            state_dict = checkpoint
+            
         model.load_state_dict(state_dict)
         model.eval()
         _trained_model_instance = model
