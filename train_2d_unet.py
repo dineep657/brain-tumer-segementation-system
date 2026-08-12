@@ -7,11 +7,9 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from PIL import Image
 
-# 1. Lightweight 2D UNet Architecture with Stable GroupNorm
 class DoubleConv(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
-        # GroupNorm(4, out_ch) provides evaluation stability independent of batch size
         self.conv = nn.Sequential(
             nn.Conv2d(in_ch, out_ch, 3, padding=1, bias=False),
             nn.GroupNorm(4, out_ch),
@@ -63,7 +61,6 @@ class LightweightUNet2D(nn.Module):
         logits = self.outc(x)
         return logits
 
-# 2. PyTorch Dataset with Standardized Min-Max Intensity Scaling
 class MRISegmentationDataset(Dataset):
     def __init__(self, img_dir, mask_dir):
         self.img_dir = img_dir
@@ -81,7 +78,6 @@ class MRISegmentationDataset(Dataset):
         img = Image.open(img_path).convert('L').resize((256, 256), Image.Resampling.BILINEAR)
         mask = Image.open(mask_path).convert('L').resize((256, 256), Image.Resampling.NEAREST)
         
-        # Min-Max Intensity Scaling (0.0 to 1.0)
         img_arr = np.array(img, dtype=np.float32)
         min_val, max_val = img_arr.min(), img_arr.max()
         if max_val > min_val:
@@ -95,7 +91,20 @@ class MRISegmentationDataset(Dataset):
         mask_tensor = torch.from_numpy(mask_arr).unsqueeze(0) # (1, 256, 256)
         return img_tensor, mask_tensor
 
-# 3. Dice + BCE Loss Function
+def compute_dice_iou(preds, targets, threshold=0.5, smooth=1e-6):
+    probs = torch.sigmoid(preds)
+    binary_preds = (probs >= threshold).float()
+    
+    intersection = (binary_preds * targets).sum(dim=(1, 2, 3))
+    total_preds = binary_preds.sum(dim=(1, 2, 3))
+    total_targets = targets.sum(dim=(1, 2, 3))
+    
+    dice = (2.0 * intersection + smooth) / (total_preds + total_targets + smooth)
+    union = total_preds + total_targets - intersection
+    iou = (intersection + smooth) / (union + smooth)
+    
+    return dice.mean().item(), iou.mean().item()
+
 class DiceBCELoss(nn.Module):
     def __init__(self):
         super().__init__()
@@ -114,10 +123,10 @@ class DiceBCELoss(nn.Module):
         
         return bce_loss + dice_loss
 
-def train_model(epochs: int = 25, batch_size: int = 8, lr: float = 1e-3):
+def train_segmentation_model(epochs: int = 10, batch_size: int = 16, lr: float = 1e-3):
     os.makedirs("models", exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Training on device: {device}")
+    print(f"Training Segmentation UNet on device: {device}")
     
     train_dataset = MRISegmentationDataset("dataset/train/images", "dataset/train/masks")
     val_dataset = MRISegmentationDataset("dataset/val/images", "dataset/val/masks")
@@ -129,10 +138,10 @@ def train_model(epochs: int = 25, batch_size: int = 8, lr: float = 1e-3):
     criterion = DiceBCELoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     
-    best_val_loss = float('inf')
+    best_val_dice = -1.0
     model_save_path = os.path.join("models", "brain_tumor_unet_2d.pth")
     
-    print(f"Beginning {epochs}-epoch 2D UNet training loop on {len(train_dataset)} training samples...")
+    print(f"Beginning Fast Phase 1: UNet Segmentation Training ({epochs} Epochs)...")
     start_time = time.time()
     
     for epoch in range(1, epochs + 1):
@@ -152,6 +161,9 @@ def train_model(epochs: int = 25, batch_size: int = 8, lr: float = 1e-3):
         # Validation Loop
         model.eval()
         val_loss = 0.0
+        val_dice_acc = 0.0
+        val_iou_acc = 0.0
+        
         with torch.no_grad():
             for imgs, masks in val_loader:
                 imgs, masks = imgs.to(device), masks.to(device)
@@ -159,19 +171,28 @@ def train_model(epochs: int = 25, batch_size: int = 8, lr: float = 1e-3):
                 loss = criterion(outputs, masks)
                 val_loss += loss.item() * imgs.size(0)
                 
+                d, i = compute_dice_iou(outputs, masks)
+                val_dice_acc += d * imgs.size(0)
+                val_iou_acc += i * imgs.size(0)
+                
         val_loss /= len(val_dataset)
+        val_dice = val_dice_acc / len(val_dataset)
+        val_iou = val_iou_acc / len(val_dataset)
         
-        if epoch % 5 == 0 or epoch == epochs:
-            print(f"Epoch [{epoch:02d}/{epochs:02d}] | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
-        
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            torch.save(model.state_dict(), model_save_path)
+        print(f"Epoch [{epoch:02d}/{epochs:02d}] | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Dice: {val_dice:.4f} | Val IoU: {val_iou:.4f}")
+            
+        if val_dice > best_val_dice:
+            best_val_dice = val_dice
+            torch.save({
+                'state_dict': model.state_dict(),
+                'val_dice': val_dice,
+                'val_iou': val_iou
+            }, model_save_path)
             
     total_time = time.time() - start_time
-    print(f"Training completed in {total_time:.2f} seconds.")
-    print(f"Best Validation Loss: {best_val_loss:.4f}")
-    print(f"Saved trained PyTorch checkpoint to: {model_save_path}")
+    print(f"Segmentation Training completed in {total_time:.2f} seconds.")
+    print(f"Best Validation Dice Score: {best_val_dice:.4f}")
+    print(f"Saved trained PyTorch UNet checkpoint to: {model_save_path}")
 
 if __name__ == "__main__":
-    train_model()
+    train_segmentation_model()
