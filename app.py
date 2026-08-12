@@ -12,7 +12,7 @@ from pdf_generator import generate_2d_pdf_report
 
 # 1. Page Configuration & Custom Styling
 st.set_page_config(
-    page_title="AI 2D Brain Tumor Segmentation & Subtype Classifier",
+    page_title="Academic 2D Brain Tumor Segmentation System",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -94,17 +94,18 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🧠 Smart 2D Brain Tumor Segmentation & Subtype Classifier")
-st.caption("B.Tech Final Project | Dynamic MONAI UNet Segmentation & Multi-Class Subtype Classifier")
+# Mandatory Academic Research Disclaimer Banner
+st.warning("⚠️ **Academic Research Notice:** For academic/research demonstration only. This system is not a clinical diagnostic tool.")
+
+st.title("🧠 Academic 2D Brain Tumor Segmentation System")
+st.caption("B.Tech Final Project | Genuine PyTorch 2D UNet Model (`models/brain_tumor_unet_2d.pth`)")
 
 # 2. Sidebar Controls
 st.sidebar.header("📁 MRI Input Options")
 
 uploaded_file = st.sidebar.file_uploader("Upload 2D MRI (.png, .jpg, .jpeg)", type=["png", "jpg", "jpeg"])
 
-sample_glioma_path = os.path.join("data", "sample_glioma.png")
-sample_meningioma_path = os.path.join("data", "sample_meningioma.png")
-sample_pituitary_path = os.path.join("data", "sample_pituitary.png")
+sample_tumor_path = os.path.join("data", "sample_glioma.png")
 sample_normal_path = os.path.join("data", "sample_normal_mri.png")
 sample_bottle_path = os.path.join("data", "sample_non_mri_bottle.png")
 
@@ -112,11 +113,9 @@ sample_choice = st.sidebar.selectbox(
     "Or Select Preset Sample Scan:",
     options=[
         "None (Awaiting File Upload)",
-        "Pituitary Brain Tumor Sample (Positive)",
-        "Glioma Brain Tumor Sample (Positive)",
-        "Meningioma Brain Tumor Sample (Positive)",
-        "Normal Healthy MRI Sample (Negative)",
-        "Non-Brain Image (Plastic Bottle Test)"
+        "Known Tumor Brain MRI Sample (Positive)",
+        "Known Normal Brain MRI Sample (Negative)",
+        "Non-Brain Image Test (Plastic Bottle)"
     ],
     index=0
 )
@@ -129,23 +128,15 @@ if uploaded_file is not None:
     display_filename = uploaded_file.name
     image_source = uploaded_file
     st.sidebar.success(f"File loaded: {display_filename}")
-elif sample_choice == "Pituitary Brain Tumor Sample (Positive)" and os.path.exists(sample_pituitary_path):
-    display_filename = "sample_pituitary.png"
-    image_source = sample_pituitary_path
-    st.sidebar.info("Preset: Pituitary Brain Tumor.")
-elif sample_choice == "Glioma Brain Tumor Sample (Positive)" and os.path.exists(sample_glioma_path):
+elif sample_choice == "Known Tumor Brain MRI Sample (Positive)" and os.path.exists(sample_tumor_path):
     display_filename = "sample_glioma.png"
-    image_source = sample_glioma_path
-    st.sidebar.info("Preset: Glioma Brain Tumor.")
-elif sample_choice == "Meningioma Brain Tumor Sample (Positive)" and os.path.exists(sample_meningioma_path):
-    display_filename = "sample_meningioma.png"
-    image_source = sample_meningioma_path
-    st.sidebar.info("Preset: Meningioma Brain Tumor.")
-elif sample_choice == "Normal Healthy MRI Sample (Negative)" and os.path.exists(sample_normal_path):
+    image_source = sample_tumor_path
+    st.sidebar.info("Preset: Known Tumor Brain MRI.")
+elif sample_choice == "Known Normal Brain MRI Sample (Negative)" and os.path.exists(sample_normal_path):
     display_filename = "sample_normal_mri.png"
     image_source = sample_normal_path
     st.sidebar.info("Preset: Healthy Normal Brain MRI.")
-elif sample_choice == "Non-Brain Image (Plastic Bottle Test)" and os.path.exists(sample_bottle_path):
+elif sample_choice == "Non-Brain Image Test (Plastic Bottle)" and os.path.exists(sample_bottle_path):
     display_filename = "sample_non_mri_bottle.png"
     image_source = sample_bottle_path
     st.sidebar.warning("Preset: Non-Brain Image Test.")
@@ -165,39 +156,32 @@ if image_source is None:
     with card_col1:
         st.markdown("**Tumor Detected?**<br><span class='status-badge-awaiting'>ℹ️ AWAITING INPUT</span>", unsafe_allow_html=True)
     with card_col2:
-        st.metric(label="Predicted Tumor Subtype", value="-", delta="Awaiting image upload")
+        st.metric(label="Tumor Area (Pixels)", value="-", delta="Awaiting image upload")
     with card_col3:
-        st.metric(label="Tumor Area", value="-", delta="Awaiting image upload")
+        st.metric(label="Brain Coverage Ratio", value="-", delta="Awaiting image upload")
     with card_col4:
-        st.metric(label="Model Confidence", value="-", delta="Awaiting image upload")
+        st.metric(label="Model Probability", value="-", delta="Awaiting image upload")
         
     st.markdown("---")
     
     st.markdown("""
         <div class='placeholder-card'>
-            <h2 style='color:#38BDF8;'>📁 Ready for Image Upload</h2>
+            <h2 style='color:#38BDF8;'>📁 Ready for MRI Image Upload</h2>
             <p style='color:#94A3B8; font-size:1.1rem;'>
                 Please upload a 2D Brain MRI scan (<strong>.png, .jpg, .jpeg</strong>) using the sidebar file uploader,<br>
-                or select a preset sample scan (e.g. <em>Pituitary Tumor, Glioma, Meningioma</em>) to initiate real-time AI segmentation & subtype classification.
+                or select a preset sample scan to execute real-time PyTorch UNet model inference.
             </p>
         </div>
     """, unsafe_allow_html=True)
-    
-    st.info("💡 **Tip:** Selecting a preset scan or uploading a custom MRI will instantly run MONAI UNet inference and dynamically classify the tumor subtype.")
     st.stop()
 
-# Dynamic Inference Execution (Only runs when image_source is provided)
+# Real-Time Fresh Prediction (Uncached for every upload)
 def run_dynamic_pipeline(src):
     tensor, raw_2d = preprocess_2d(src)
     pred_info = predict_2d(tensor, raw_2d)
     mask = pred_info["mask"]
     
-    metrics = analyze_tumor_metrics(
-        mask, raw_2d,
-        confidence=pred_info["confidence"],
-        tumor_type=pred_info["tumor_type"],
-        type_confidence=pred_info["tumor_type_confidence"]
-    )
+    metrics = analyze_tumor_metrics(mask, raw_2d, confidence=pred_info["confidence"])
     
     os.makedirs("data", exist_ok=True)
     overlay_img_path = os.path.join("data", "2d_tumor_overlay.png")
@@ -221,7 +205,8 @@ except Exception as e:
 
 # Handle Invalid Non-MRI Input Warning Banner
 if not pred_info["is_valid_mri"]:
-    st.error(f"🚨 {pred_info['validation_error']}")
+    st.error("Invalid input: Please upload a brain MRI image.")
+    st.caption(f"Reason: {pred_info['validation_error']}")
 
 # 3. Sidebar Exports
 st.sidebar.subheader("📥 Export & Report Options")
@@ -249,7 +234,7 @@ st.sidebar.download_button(
     mime="image/png"
 )
 
-# 4. Active Results Metrics Cards
+# 4. Results Metrics Cards
 st.subheader("📊 Quantitative Clinical Metrics")
 
 card_col1, card_col2, card_col3, card_col4 = st.columns(4)
@@ -258,7 +243,7 @@ with card_col1:
     if not pred_info["is_valid_mri"]:
         status_html = "<span class='status-badge-invalid'>⚠️ INVALID INPUT</span>"
     elif metrics["tumor_detected"]:
-        status_html = "<span class='status-badge-yes'>🔴 DETECTED</span>"
+        status_html = "<span class='status-badge-yes'>🔴 TUMOR DETECTED</span>"
     else:
         status_html = "<span class='status-badge-no'>🟢 NO TUMOR DETECTED</span>"
         
@@ -266,23 +251,23 @@ with card_col1:
 
 with card_col2:
     st.metric(
-        label="Predicted Tumor Subtype",
-        value=metrics["tumor_type"],
-        delta=f"{metrics['tumor_type_confidence_str']} Subtype Confidence"
+        label="Tumor Area",
+        value=f"{metrics['tumor_area_pixels']:,} Pixels",
+        delta="Calculated from predicted mask"
     )
 
 with card_col3:
     st.metric(
-        label="Tumor Area",
-        value=f"{metrics['tumor_area_pixels']:,} Pixels",
-        delta="Calculated from segmentation mask"
+        label="Brain Coverage Ratio",
+        value=f"{metrics['brain_coverage_pct']:.2f} %",
+        delta="Tumor relative to brain area"
     )
 
 with card_col4:
     st.metric(
-        label="Model Confidence",
+        label="Model Mean Probability",
         value=metrics['confidence_score'],
-        delta="Mean softmax probability"
+        delta="Mean sigmoid probability"
     )
 
 st.markdown("---")
@@ -291,37 +276,37 @@ st.markdown("---")
 col_left, col_right = st.columns(2)
 
 with col_left:
-    st.subheader("📷 Input Image Slice")
+    st.subheader("📷 Input Image Matrix")
     fig_raw = render_segmentation_figure(
         raw_2d, mask, show_overlay=False, high_contrast=high_contrast,
-        title="Input Image Grayscale Matrix (256x256)"
+        title="Input Grayscale Image Matrix (256x256)"
     )
     st.pyplot(fig_raw, width="stretch")
     plt.close(fig_raw)
 
 with col_right:
-    st.subheader("🎯 MONAI UNet Segmentation Overlay")
+    st.subheader("🎯 PyTorch UNet Predicted Mask Overlay")
     fig_segmented = render_segmentation_figure(
         raw_2d, mask, alpha=overlay_alpha, show_overlay=show_overlay and pred_info["is_valid_mri"],
         high_contrast=high_contrast, show_contours=show_contours and pred_info["is_valid_mri"],
-        title=f"Subtype: {pred_info['tumor_type']} Overlay" if pred_info["is_valid_mri"] else "Segmentation Skipped (Invalid MRI)"
+        title="Predicted Tumor Segmentation Overlay" if pred_info["is_valid_mri"] else "Segmentation Skipped (Non-MRI)"
     )
     st.pyplot(fig_segmented, width="stretch")
     plt.close(fig_segmented)
 
-# 6. Viva Panel: Model Diagnostics & Subtype Classification Telemetry
+# 6. Viva Presentation Diagnostics Panel
 st.markdown("---")
-with st.expander("🔬 Model Inference Diagnostics & Telemetry (Viva Presentation Panel)", expanded=True):
-    v_col1, v_col2, v_col3 = st.columns(3)
+with st.expander("🔬 Model Diagnostics & Architecture Telemetry (Viva Panel)", expanded=True):
+    v_col1, v_col2 = st.columns(2)
     
     with v_col1:
-        st.markdown(f"**Model Load Status:**<br>`{pred_info['model_status']}`", unsafe_allow_html=True)
-        st.markdown(f"**PyTorch Forward Pass:**<br>`{'EXECUTED' if pred_info['model_called'] else 'SKIPPED'}`", unsafe_allow_html=True)
+        st.markdown(f"**Checkpoint Path:** `{pred_info['checkpoint_path']}`")
+        st.markdown(f"**Model Architecture:** `{pred_info['model_architecture']}`")
+        st.markdown(f"**Input Dimensions:** `{pred_info['tensor_shape']}`")
+        st.markdown(f"**Preprocessing:** `Grayscale -> Resize (256x256) -> Min-Max Normalization (0.0 to 1.0)`")
         
     with v_col2:
-        st.markdown(f"**Input Tensor Shape:**<br>`{pred_info['tensor_shape']}`", unsafe_allow_html=True)
-        st.markdown(f"**Inference Execution Time:**<br>`⚡ {pred_info['execution_time_ms']} ms`", unsafe_allow_html=True)
-        
-    with v_col3:
-        st.markdown(f"**Predicted Subtype:**<br>`{pred_info['tumor_type']} ({pred_info['tumor_type_confidence']*100:.1f}%)`", unsafe_allow_html=True)
-        st.markdown(f"**Segmented Tumor Pixels:**<br>`{pred_info['tumor_pixel_count']} voxels`", unsafe_allow_html=True)
+        st.markdown(f"**Segmentation Threshold:** `Sigmoid Probability >= {pred_info['prob_threshold']} (Min {pred_info['min_pixel_threshold']} px)`")
+        st.markdown(f"**Inference Time:** `⚡ {pred_info['execution_time_ms']} ms`")
+        st.markdown(f"**Predicted Tumor Pixels:** `{pred_info['tumor_pixel_count']} voxels`")
+        st.markdown(f"**PyTorch Forward Pass:** `{'EXECUTED' if pred_info['model_called'] else 'SKIPPED (Invalid Input)'}`")
