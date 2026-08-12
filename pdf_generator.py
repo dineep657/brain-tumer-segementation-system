@@ -6,8 +6,8 @@ from typing import Dict, Any
 class TumorReportPDF(FPDF):
     def header(self):
         self.set_font('Helvetica', 'B', 16)
-        self.set_text_color(30, 58, 138)  # Deep Navy Blue
-        self.cell(0, 10, 'Academic 2D Brain Tumor Segmentation Report', border=False, new_x="LMARGIN", new_y="NEXT", align='C')
+        self.set_text_color(30, 58, 138)
+        self.cell(0, 10, 'Academic 2D Brain Tumor Segmentation & Classification Report', border=False, new_x="LMARGIN", new_y="NEXT", align='C')
         self.set_draw_color(30, 58, 138)
         self.set_line_width(0.5)
         self.line(10, 22, 200, 22)
@@ -17,11 +17,11 @@ class TumorReportPDF(FPDF):
         self.set_y(-15)
         self.set_font('Helvetica', 'I', 8)
         self.set_text_color(128, 128, 128)
-        self.cell(0, 10, f'For Academic Demonstration Only | PyTorch 2D UNet | Page {self.page_no()}', align='C')
+        self.cell(0, 10, f'For Academic Demonstration Only | PyTorch UNet & Classifier | Page {self.page_no()}', align='C')
 
 def generate_2d_pdf_report(filename: str, metrics: Dict[str, Any], slice_image_path: str = None) -> bytes:
     """
-    Generates a B.Tech project PDF report with real model predictions and academic research disclaimers.
+    Generates a B.Tech project PDF report with real UNet segmentation & PyTorch classifier predictions.
     """
     pdf = TumorReportPDF()
     pdf.add_page()
@@ -43,15 +43,15 @@ def generate_2d_pdf_report(filename: str, metrics: Dict[str, Any], slice_image_p
     pdf.set_text_color(51, 65, 85)
     pdf.cell(0, 6, f"File Name: {filename}", new_x="LMARGIN", new_y="NEXT")
     pdf.cell(0, 6, f"Report Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 6, "Trained Checkpoint: models/brain_tumor_unet_2d.pth", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 6, "Model Architecture: Lightweight 2D UNet (PyTorch)", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 6, "Preprocessing: Grayscale -> Resize (256x256) -> Min-Max Normalization (0-1)", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, "Segmentation Checkpoint: models/brain_tumor_unet_2d.pth (LightweightUNet2D)", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, "Classifier Checkpoint: models/brain_tumor_classifier_2d.pth (LightweightClassifier2D)", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, "Supported Classes: ['Glioma', 'Meningioma', 'Pituitary', 'No Tumor']", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(6)
     
     # 2. Executive Detection Summary
     pdf.set_font("Helvetica", "B", 12)
     pdf.set_text_color(15, 23, 42)
-    pdf.cell(0, 8, "Executive Detection Summary", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, "Executive Diagnostic & Classification Summary", new_x="LMARGIN", new_y="NEXT")
     
     pdf.set_font("Helvetica", "B", 11)
     if metrics["tumor_detected"]:
@@ -63,6 +63,7 @@ def generate_2d_pdf_report(filename: str, metrics: Dict[str, Any], slice_image_p
         
     pdf.cell(0, 7, f"Diagnosis Status: {status_text}", new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(51, 65, 85)
+    pdf.cell(0, 7, f"Predicted Tumor Type: {metrics['tumor_subtype_label']} (Classifier Confidence: {metrics['classification_confidence']})", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
     
     # 3. Quantitative Analytics Table
@@ -83,14 +84,17 @@ def generate_2d_pdf_report(filename: str, metrics: Dict[str, Any], slice_image_p
     pdf.cell(col_width, row_height, " Tumor Detection Status", border=1)
     pdf.cell(col_width, row_height, f" {metrics['tumor_detected_label']}", border=1, new_x="LMARGIN", new_y="NEXT")
     
+    pdf.cell(col_width, row_height, " Classified Tumor Type", border=1)
+    pdf.cell(col_width, row_height, f" {metrics['tumor_subtype_label']}", border=1, new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.cell(col_width, row_height, " Classifier Model Confidence", border=1)
+    pdf.cell(col_width, row_height, f" {metrics['classification_confidence']}", border=1, new_x="LMARGIN", new_y="NEXT")
+    
     pdf.cell(col_width, row_height, " Predicted Tumor Area", border=1)
     pdf.cell(col_width, row_height, f" {metrics['tumor_area_pixels']:,} pixels", border=1, new_x="LMARGIN", new_y="NEXT")
     
     pdf.cell(col_width, row_height, " Brain Coverage Ratio", border=1)
     pdf.cell(col_width, row_height, f" {metrics['brain_coverage_pct']:.2f} %", border=1, new_x="LMARGIN", new_y="NEXT")
-    
-    pdf.cell(col_width, row_height, " Mean Sigmoid Probability", border=1)
-    pdf.cell(col_width, row_height, f" {metrics['confidence_score']}", border=1, new_x="LMARGIN", new_y="NEXT")
     
     pdf.ln(8)
     
@@ -103,16 +107,3 @@ def generate_2d_pdf_report(filename: str, metrics: Dict[str, Any], slice_image_p
         pdf.image(slice_image_path, x=35, w=140)
         
     return bytes(pdf.output())
-
-if __name__ == "__main__":
-    test_metrics = {
-        "tumor_detected": True,
-        "tumor_detected_label": "YES",
-        "tumor_area_pixels": 1917,
-        "brain_area_pixels": 31415,
-        "brain_coverage_pct": 6.10,
-        "confidence_score": "89.2%",
-        "raw_confidence": 0.892
-    }
-    test_pdf = generate_2d_pdf_report("sample_glioma.png", test_metrics)
-    print(f"Real Model PDF Report generated: {len(test_pdf)} bytes")
