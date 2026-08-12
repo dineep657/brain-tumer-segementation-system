@@ -1,5 +1,4 @@
 import os
-import tempfile
 import numpy as np
 import matplotlib.pyplot as plt
 import streamlit as st
@@ -177,28 +176,28 @@ if image_source is None:
 
 # Real-Time Fresh Prediction (Uncached for every upload)
 def run_dynamic_pipeline(src):
-    tensor, raw_2d = preprocess_2d(src)
-    pred_info = predict_2d(tensor, raw_2d)
+    tensor, raw_original, orig_dims = preprocess_2d(src)
+    pred_info = predict_2d(tensor, raw_original)
     mask = pred_info["mask"]
     
-    metrics = analyze_tumor_metrics(mask, raw_2d, confidence=pred_info["confidence"])
+    metrics = analyze_tumor_metrics(mask, raw_original, confidence=pred_info["confidence"])
     
     os.makedirs("data", exist_ok=True)
     overlay_img_path = os.path.join("data", "2d_tumor_overlay.png")
     
     fig_pdf = render_segmentation_figure(
-        raw_2d, mask, alpha=0.5, show_overlay=pred_info["is_valid_mri"],
+        raw_original, mask, alpha=0.5, show_overlay=pred_info["is_valid_mri"],
         high_contrast=False, show_contours=pred_info["is_valid_mri"], title="2D MRI Segmentation Result"
     )
     fig_pdf.savefig(overlay_img_path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close(fig_pdf)
     
-    png_bytes = export_overlay_as_png(raw_2d, mask, alpha=0.5)
+    png_bytes = export_overlay_as_png(raw_original, mask, alpha=0.5)
     
-    return raw_2d, mask, metrics, pred_info, overlay_img_path, png_bytes
+    return raw_original, mask, metrics, pred_info, overlay_img_path, png_bytes
 
 try:
-    raw_2d, mask, metrics, pred_info, overlay_img_path, png_bytes = run_dynamic_pipeline(image_source)
+    raw_original, mask, metrics, pred_info, overlay_img_path, png_bytes = run_dynamic_pipeline(image_source)
 except Exception as e:
     st.error(f"Error processing image: {e}")
     st.stop()
@@ -278,8 +277,8 @@ col_left, col_right = st.columns(2)
 with col_left:
     st.subheader("📷 Input Image Matrix")
     fig_raw = render_segmentation_figure(
-        raw_2d, mask, show_overlay=False, high_contrast=high_contrast,
-        title="Input Grayscale Image Matrix (256x256)"
+        raw_original, mask, show_overlay=False, high_contrast=high_contrast,
+        title=f"Input Grayscale Image Matrix ({raw_original.shape[1]}x{raw_original.shape[0]})"
     )
     st.pyplot(fig_raw, width="stretch")
     plt.close(fig_raw)
@@ -287,7 +286,7 @@ with col_left:
 with col_right:
     st.subheader("🎯 PyTorch UNet Predicted Mask Overlay")
     fig_segmented = render_segmentation_figure(
-        raw_2d, mask, alpha=overlay_alpha, show_overlay=show_overlay and pred_info["is_valid_mri"],
+        raw_original, mask, alpha=overlay_alpha, show_overlay=show_overlay and pred_info["is_valid_mri"],
         high_contrast=high_contrast, show_contours=show_contours and pred_info["is_valid_mri"],
         title="Predicted Tumor Segmentation Overlay" if pred_info["is_valid_mri"] else "Segmentation Skipped (Non-MRI)"
     )

@@ -2,7 +2,6 @@ import os
 import time
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
 from PIL import Image
 from typing import Tuple, Dict, Any
@@ -36,7 +35,7 @@ def validate_brain_mri(raw_image: np.ndarray) -> Tuple[bool, str]:
     Checks outer border darkness and tissue intensity variance.
     """
     h, w = raw_image.shape
-    border_width = 12
+    border_width = min(12, h // 10, w // 10)
     
     top_border = raw_image[:border_width, :]
     bottom_border = raw_image[-border_width:, :]
@@ -61,32 +60,43 @@ def validate_brain_mri(raw_image: np.ndarray) -> Tuple[bool, str]:
         
     return True, "Valid Brain MRI Scan"
 
-def preprocess_2d(image_input) -> Tuple[torch.Tensor, np.ndarray]:
+def preprocess_2d(image_input) -> Tuple[torch.Tensor, np.ndarray, Tuple[int, int]]:
     """
-    Standardized preprocessing pipeline identical to training:
-    1. Grayscale conversion ('L')
-    2. Resize to (256, 256)
-    3. Min-Max Intensity Normalization (0.0 to 1.0)
-    4. 4D Float Tensor conversion (1, 1, 256, 256)
+    Standardized preprocessing pipeline matching dataset training:
+    1. Open PIL image as grayscale ('L')
+    2. Store original dimensions (orig_h, orig_w)
+    3. Resize image to (256, 256)
+    4. Min-Max Intensity Scaling (0.0 to 1.0)
+    5. Convert to 4D Float Tensor (1, 1, 256, 256)
     """
-    img = Image.open(image_input).convert('L')
-    img_resized = img.resize((256, 256), Image.Resampling.BILINEAR)
+    img_pil = Image.open(image_input).convert('L')
+    orig_w, orig_h = img_pil.size
     
-    raw_data = np.array(img_resized, dtype=np.float32)
-    normalized_data = raw_data / 255.0 # Min-Max Scaling (0.0 - 1.0) matching dataset training
+    raw_original = np.array(img_pil, dtype=np.float32)
     
+    img_256 = img_pil.resize((256, 256), Image.Resampling.BILINEAR)
+    img_arr = np.array(img_256, dtype=np.float32)
+    
+    min_val, max_val = img_arr.min(), img_arr.max()
+    if max_val > min_val:
+        normalized_data = (img_arr - min_val) / (max_val - min_val + 1e-8)
+    else:
+        normalized_data = img_arr / 255.0
+        
     tensor = torch.from_numpy(normalized_data).unsqueeze(0).unsqueeze(0).float()
-    return tensor, raw_data
+    return tensor, raw_original, (orig_h, orig_w)
 
-def predict_2d(tensor: torch.Tensor, raw_image: np.ndarray, prob_threshold: float = 0.50, min_pixel_threshold: int = 20) -> Dict[str, Any]:
+def predict_2d(tensor: torch.Tensor, raw_original_image: np.ndarray, prob_threshold: float = 0.50, min_pixel_threshold: int = 20) -> Dict[str, Any]:
     """
-    Executes genuine model forward pass using the loaded trained checkpoint ('models/brain_tumor_unet_2d.pth').
+    Executes PyTorch forward pass using the loaded trained checkpoint ('models/brain_tumor_unet_2d.pth').
     Derives all tumor metrics directly from the model's actual output probability mask.
+    Resizes binary mask back to original image dimensions (orig_h, orig_w) using Nearest-Neighbor interpolation.
     """
     start_time = time.perf_counter()
+    orig_h, orig_w = raw_original_image.shape
     
     # 1. Basic Quality & Structural Validation
-    is_valid, validation_msg = validate_brain_mri(raw_image)
+    is_valid, validation_msg = validate_brain_mri(raw_original_image)
     if not is_valid:
         end_time = time.perf_counter()
         return {
@@ -95,9 +105,8 @@ def predict_2d(tensor: torch.Tensor, raw_image: np.ndarray, prob_threshold: floa
             "checkpoint_path": CHECKPOINT_PATH,
             "model_architecture": "LightweightUNet2D (PyTorch)",
             "model_called": False,
-            "model_status": "Skipped (Invalid Non-MRI Input)",
             "tensor_shape": list(tensor.shape),
-            "mask": np.zeros_like(raw_image, dtype=np.uint8),
+            "mask": np.zeros((orig_h, orig_w), dtype=np.uint8),
             "tumor_detected": False,
             "tumor_pixel_count": 0,
             "confidence": None,
@@ -110,24 +119,32 @@ def predict_2d(tensor: torch.Tensor, raw_image: np.ndarray, prob_threshold: floa
     model = load_trained_model()
     
     with torch.no_grad():
-        logits = model(tensor) # Forward pass through trained weights
-        probabilities = torch.sigmoid(logits) # Sigmoid activation probability map
+        logits = model(tensor) # Forward pass
+        probabilities = torch.sigmoid(logits) # Sigmoid probability map (1, 1, 256, 256)
         
-        prob_map = probabilities[0, 0, :, :].cpu().numpy()
+        prob_map_256 = probabilities[0, 0, :, :].cpu().numpy()
+        binary_mask_256 = (prob_map_256 >= prob_threshold).astype(np.uint8)
         
-        # Apply documented segmentation probability threshold (PROB_THRESHOLD = 0.50)
-        binary_mask = (prob_map >= prob_threshold).astype(np.uint8)
-        tumor_pixel_count = int(np.sum(binary_mask == 1))
+        # Resize binary mask back to original image dimensions (orig_h, orig_w) using Nearest-Neighbor
+        if (orig_h, orig_w) != (256, 256):
+            mask_pil = Image.fromarray(binary_mask_256).resize((orig_w, orig_h), Image.Resampling.NEAREST)
+            final_mask = np.array(mask_pil, dtype=np.uint8)
+            prob_pil = Image.fromarray((prob_map_256 * 255.0).astype(np.uint8)).resize((orig_w, orig_h), Image.Resampling.BILINEAR)
+            final_prob_map = np.array(prob_pil, dtype=np.float32) / 255.0
+        else:
+            final_mask = binary_mask_256
+            final_prob_map = prob_map_256
+            
+        tumor_pixel_count = int(np.sum(final_mask == 1))
         
-        # Decision thresholding
         if tumor_pixel_count < min_pixel_threshold:
-            binary_mask = np.zeros_like(binary_mask, dtype=np.uint8)
+            final_mask = np.zeros((orig_h, orig_w), dtype=np.uint8)
             tumor_pixel_count = 0
             confidence = None
             tumor_detected = False
         else:
             tumor_detected = True
-            tumor_probs_in_mask = prob_map[binary_mask == 1]
+            tumor_probs_in_mask = final_prob_map[final_mask == 1]
             confidence = float(np.mean(tumor_probs_in_mask)) if len(tumor_probs_in_mask) > 0 else float(prob_threshold)
             
     end_time = time.perf_counter()
@@ -139,9 +156,8 @@ def predict_2d(tensor: torch.Tensor, raw_image: np.ndarray, prob_threshold: floa
         "checkpoint_path": CHECKPOINT_PATH,
         "model_architecture": "LightweightUNet2D (PyTorch)",
         "model_called": True,
-        "model_status": f"Loaded Checkpoint '{CHECKPOINT_PATH}'",
         "tensor_shape": list(tensor.shape),
-        "mask": binary_mask,
+        "mask": final_mask,
         "tumor_detected": tumor_detected,
         "tumor_pixel_count": tumor_pixel_count,
         "confidence": confidence,
@@ -149,19 +165,3 @@ def predict_2d(tensor: torch.Tensor, raw_image: np.ndarray, prob_threshold: floa
         "prob_threshold": prob_threshold,
         "min_pixel_threshold": min_pixel_threshold
     }
-
-if __name__ == "__main__":
-    print("--- 1. Testing Trained Model on Known Tumor MRI ---")
-    t1, r1 = preprocess_2d("data/sample_glioma.png")
-    p1 = predict_2d(t1, r1)
-    print(f"Valid: {p1['is_valid_mri']} | Model Called: {p1['model_called']} | Detected: {p1['tumor_detected']} | Pixels: {p1['tumor_pixel_count']} | Time: {p1['execution_time_ms']} ms | Conf: {p1['confidence']}")
-    
-    print("\n--- 2. Testing Trained Model on Known Non-Tumor MRI ---")
-    t2, r2 = preprocess_2d("data/sample_normal_mri.png")
-    p2 = predict_2d(t2, r2)
-    print(f"Valid: {p2['is_valid_mri']} | Model Called: {p2['model_called']} | Detected: {p2['tumor_detected']} | Pixels: {p2['tumor_pixel_count']} | Time: {p2['execution_time_ms']} ms | Conf: {p2['confidence']}")
-    
-    print("\n--- 3. Testing Trained Model on Non-MRI Image ---")
-    t3, r3 = preprocess_2d("data/sample_non_mri_bottle.png")
-    p3 = predict_2d(t3, r3)
-    print(f"Valid: {p3['is_valid_mri']} | Model Called: {p3['model_called']} | Error: {p3['validation_error']}")
