@@ -1,0 +1,21 @@
+# Virtual environment
+venv/
+.venv/
+ENV/
+env/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data outputs & temporary files
+data/test_report.pdf
+data/peak_tumor_slice.png
+data/*.tmp
+temp/
+.tmp/
+
+# OS metadata
+.DS_Store
+Thumbs.db

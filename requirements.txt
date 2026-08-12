@@ -1,0 +1,7 @@
+torch
+monai
+streamlit
+nibabel
+numpy
+matplotlib
+fpdf2
