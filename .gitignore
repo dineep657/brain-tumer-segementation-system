@@ -1,21 +1,13 @@
-# Virtual environment
+# Python venv & cache
 venv/
-.venv/
-ENV/
-env/
-
-# Python bytecode
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+.cache/
 
-# Data outputs & temporary files
-data/test_report.pdf
-data/peak_tumor_slice.png
-data/*.tmp
-temp/
-.tmp/
+# Datasets (large image collections)
+dataset/
+classification_dataset/
 
-# OS metadata
+# System / OS
 .DS_Store
 Thumbs.db

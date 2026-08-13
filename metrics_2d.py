@@ -28,8 +28,12 @@ def analyze_tumor_metrics(
         seg_confidence_str = "Not available"
         
     if cls_result is not None:
-        tumor_type = cls_result.get("predicted_class", "No Tumor")
-        cls_confidence_str = cls_result.get("confidence_display", "N/A")
+        tumor_type = cls_result.get("tumor_type", cls_result.get("predicted_class", "No Tumor"))
+        cls_confidence = cls_result.get("confidence")
+        if cls_confidence is not None and tumor_type != "No Tumor" and tumor_type != "Invalid Input":
+            cls_confidence_str = f"{cls_confidence * 100:.1f}%"
+        else:
+            cls_confidence_str = cls_result.get("confidence_display", "N/A")
     else:
         tumor_type = "No Tumor" if not tumor_detected else "Unknown"
         cls_confidence_str = "N/A"

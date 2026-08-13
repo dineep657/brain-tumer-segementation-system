@@ -1,11 +1,14 @@
 import os
 import time
+import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from PIL import Image
+
+torch.set_num_threads(os.cpu_count() or 4)
 
 class DoubleConv(nn.Module):
     def __init__(self, in_ch, out_ch):
@@ -18,6 +21,7 @@ class DoubleConv(nn.Module):
             nn.GroupNorm(4, out_ch),
             nn.ReLU(inplace=True)
         )
+
     def forward(self, x):
         return self.conv(x)
 
@@ -61,126 +65,141 @@ class LightweightUNet2D(nn.Module):
         logits = self.outc(x)
         return logits
 
-class MRISegmentationDataset(Dataset):
-    def __init__(self, img_dir, mask_dir):
-        self.img_dir = img_dir
-        self.mask_dir = mask_dir
-        self.filename_list = sorted([f for f in os.listdir(img_dir) if f.endswith('.png')])
-
-    def __len__(self):
-        return len(self.filename_list)
-
-    def __getitem__(self, idx):
-        fname = self.filename_list[idx]
-        img_path = os.path.join(self.img_dir, fname)
-        mask_path = os.path.join(self.mask_dir, fname)
-        
-        img = Image.open(img_path).convert('L').resize((256, 256), Image.Resampling.BILINEAR)
-        mask = Image.open(mask_path).convert('L').resize((256, 256), Image.Resampling.NEAREST)
-        
-        img_arr = np.array(img, dtype=np.float32)
-        min_val, max_val = img_arr.min(), img_arr.max()
-        if max_val > min_val:
-            normalized_img = (img_arr - min_val) / (max_val - min_val + 1e-8)
-        else:
-            normalized_img = img_arr / 255.0
-            
-        mask_arr = (np.array(mask, dtype=np.float32) > 128.0).astype(np.float32)
-        
-        img_tensor = torch.from_numpy(normalized_img).unsqueeze(0)   # (1, 256, 256)
-        mask_tensor = torch.from_numpy(mask_arr).unsqueeze(0) # (1, 256, 256)
-        return img_tensor, mask_tensor
-
-def compute_dice_iou(preds, targets, threshold=0.5, smooth=1e-6):
-    probs = torch.sigmoid(preds)
-    binary_preds = (probs >= threshold).float()
-    
-    intersection = (binary_preds * targets).sum(dim=(1, 2, 3))
-    total_preds = binary_preds.sum(dim=(1, 2, 3))
-    total_targets = targets.sum(dim=(1, 2, 3))
-    
-    dice = (2.0 * intersection + smooth) / (total_preds + total_targets + smooth)
-    union = total_preds + total_targets - intersection
-    iou = (intersection + smooth) / (union + smooth)
-    
-    return dice.mean().item(), iou.mean().item()
-
-class DiceBCELoss(nn.Module):
-    def __init__(self):
+class DiceBCEWithLogitsLoss(nn.Module):
+    def __init__(self, smooth=1.0):
         super().__init__()
+        self.smooth = smooth
         self.bce = nn.BCEWithLogitsLoss()
 
-    def forward(self, inputs, targets, smooth=1.0):
-        bce_loss = self.bce(inputs, targets)
-        probs = torch.sigmoid(inputs)
+    def forward(self, logits, targets):
+        bce_loss = self.bce(logits, targets)
+        probs = torch.sigmoid(logits)
         
-        inputs_flat = probs.view(-1)
+        probs_flat = probs.view(-1)
         targets_flat = targets.view(-1)
         
-        intersection = (inputs_flat * targets_flat).sum()
-        dice_score = (2.0 * intersection + smooth) / (inputs_flat.sum() + targets_flat.sum() + smooth)
+        intersection = (probs_flat * targets_flat).sum()
+        dice_score = (2.0 * intersection + self.smooth) / (probs_flat.sum() + targets_flat.sum() + self.smooth)
         dice_loss = 1.0 - dice_score
         
         return bce_loss + dice_loss
 
-def train_segmentation_model(epochs: int = 10, batch_size: int = 16, lr: float = 1e-3):
+class RealMRISegmentationDataset(Dataset):
+    def __init__(self, root_dir, augment=False, positive_only=True):
+        self.img_dir = os.path.join(root_dir, "images")
+        self.mask_dir = os.path.join(root_dir, "masks")
+        self.augment = augment
+        all_fnames = sorted([f for f in os.listdir(self.img_dir) if f.endswith('.png')])
+        
+        self.filenames = []
+        for fname in all_fnames:
+            mpath = os.path.join(self.mask_dir, fname)
+            mask_arr = np.array(Image.open(mpath))
+            if not positive_only or mask_arr.max() > 0:
+                self.filenames.append(fname)
+
+    def __len__(self):
+        return len(self.filenames)
+
+    def __getitem__(self, idx):
+        fname = self.filenames[idx]
+        ipath = os.path.join(self.img_dir, fname)
+        mpath = os.path.join(self.mask_dir, fname)
+        
+        img = Image.open(ipath).convert('L').resize((128, 128), Image.Resampling.BILINEAR)
+        mask = Image.open(mpath).convert('L').resize((128, 128), Image.Resampling.NEAREST)
+        
+        if self.augment and random.random() > 0.5:
+            img = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+            mask = mask.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+            
+        img_arr = np.array(img, dtype=np.float32)
+        min_v, max_v = img_arr.min(), img_arr.max()
+        norm_img = (img_arr - min_v) / (max_v - min_v + 1e-8) if max_v > min_v else img_arr / 255.0
+        
+        mask_arr = (np.array(mask, dtype=np.float32) > 128.0).astype(np.float32)
+        
+        itensor = torch.from_numpy(norm_img).unsqueeze(0).float()
+        mtensor = torch.from_numpy(mask_arr).unsqueeze(0).float()
+        
+        return itensor, mtensor
+
+def compute_dice_iou(logits, targets, smooth=1.0, threshold=0.5):
+    probs = torch.sigmoid(logits)
+    preds = (probs >= threshold).float()
+    
+    preds_flat = preds.view(-1)
+    targets_flat = targets.view(-1)
+    
+    intersection = (preds_flat * targets_flat).sum().item()
+    total_sum = preds_flat.sum().item() + targets_flat.sum().item()
+    
+    dice = (2.0 * intersection + smooth) / (total_sum + smooth)
+    
+    union = total_sum - intersection
+    iou = (intersection + smooth) / (union + smooth)
+    
+    return dice, iou
+
+def train_unet(epochs: int = 8, batch_size: int = 32, lr: float = 1e-3):
     os.makedirs("models", exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Training Segmentation UNet on device: {device}")
+    print(f"Fast Training UNet on Tumor-Positive Slices on device: {device}")
     
-    train_dataset = MRISegmentationDataset("dataset/train/images", "dataset/train/masks")
-    val_dataset = MRISegmentationDataset("dataset/val/images", "dataset/val/masks")
+    train_dataset = RealMRISegmentationDataset(os.path.join("dataset", "train"), augment=True, positive_only=True)
+    val_dataset = RealMRISegmentationDataset(os.path.join("dataset", "val"), augment=False, positive_only=True)
     
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     model = LightweightUNet2D(in_channels=1, out_channels=1).to(device)
-    criterion = DiceBCELoss()
+    criterion = DiceBCEWithLogitsLoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     
-    best_val_dice = -1.0
+    best_val_dice = 0.0
     model_save_path = os.path.join("models", "brain_tumor_unet_2d.pth")
     
-    print(f"Beginning Fast Phase 1: UNet Segmentation Training ({epochs} Epochs)...")
+    print(f"Beginning Fast Real LGG UNet Training ({epochs} Epochs, {len(train_dataset)} positive train, {len(val_dataset)} positive val)...")
     start_time = time.time()
     
     for epoch in range(1, epochs + 1):
         model.train()
         train_loss = 0.0
+        
         for imgs, masks in train_loader:
             imgs, masks = imgs.to(device), masks.to(device)
             optimizer.zero_grad()
-            outputs = model(imgs)
-            loss = criterion(outputs, masks)
+            logits = model(imgs)
+            loss = criterion(logits, masks)
             loss.backward()
             optimizer.step()
             train_loss += loss.item() * imgs.size(0)
             
         train_loss /= len(train_dataset)
         
-        # Validation Loop
+        # Validation
         model.eval()
         val_loss = 0.0
-        val_dice_acc = 0.0
-        val_iou_acc = 0.0
+        val_dice_total = 0.0
+        val_iou_total = 0.0
         
         with torch.no_grad():
             for imgs, masks in val_loader:
                 imgs, masks = imgs.to(device), masks.to(device)
-                outputs = model(imgs)
-                loss = criterion(outputs, masks)
+                logits = model(imgs)
+                loss = criterion(logits, masks)
                 val_loss += loss.item() * imgs.size(0)
                 
-                d, i = compute_dice_iou(outputs, masks)
-                val_dice_acc += d * imgs.size(0)
-                val_iou_acc += i * imgs.size(0)
+                dice, iou = compute_dice_iou(logits, masks)
+                val_dice_total += dice * imgs.size(0)
+                val_iou_total += iou * imgs.size(0)
                 
         val_loss /= len(val_dataset)
-        val_dice = val_dice_acc / len(val_dataset)
-        val_iou = val_iou_acc / len(val_dataset)
+        val_dice = val_dice_total / len(val_dataset)
+        val_iou = val_iou_total / len(val_dataset)
         
         print(f"Epoch [{epoch:02d}/{epochs:02d}] | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Dice: {val_dice:.4f} | Val IoU: {val_iou:.4f}")
-            
+        
         if val_dice > best_val_dice:
             best_val_dice = val_dice
             torch.save({
@@ -190,9 +209,9 @@ def train_segmentation_model(epochs: int = 10, batch_size: int = 16, lr: float =
             }, model_save_path)
             
     total_time = time.time() - start_time
-    print(f"Segmentation Training completed in {total_time:.2f} seconds.")
+    print(f"\nUNet Training completed in {total_time:.2f} seconds.")
     print(f"Best Validation Dice Score: {best_val_dice:.4f}")
     print(f"Saved trained PyTorch UNet checkpoint to: {model_save_path}")
 
 if __name__ == "__main__":
-    train_segmentation_model()
+    train_unet()

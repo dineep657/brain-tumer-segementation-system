@@ -1,11 +1,15 @@
 import os
 import time
+import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from PIL import Image
+
+# Optimize CPU threads for fast execution
+torch.set_num_threads(os.cpu_count() or 4)
 
 CLASSES = ['Glioma', 'Meningioma', 'Pituitary', 'No Tumor']
 
@@ -47,10 +51,11 @@ class LightweightClassifier2D(nn.Module):
         logits = self.classifier(x)
         return logits
 
-# 2. PyTorch Dataset for 4-Class Classification
+# 2. Optimized Dataset with Fast In-Memory Processing & Light Augmentation
 class MRIClassificationDataset(Dataset):
-    def __init__(self, root_dir):
+    def __init__(self, root_dir, augment=False):
         self.root_dir = root_dir
+        self.augment = augment
         self.samples = []
         
         for c_idx, cname in enumerate(CLASSES):
@@ -65,9 +70,15 @@ class MRIClassificationDataset(Dataset):
 
     def __getitem__(self, idx):
         img_path, label = self.samples[idx]
-        img = Image.open(img_path).convert('L').resize((256, 256), Image.Resampling.BILINEAR)
+        img = Image.open(img_path).convert('L').resize((128, 128), Image.Resampling.BILINEAR)
         
-        # Min-Max Normalization (0.0 to 1.0)
+        if self.augment:
+            if random.random() > 0.5:
+                img = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+            if random.random() > 0.5:
+                angle = random.uniform(-10.0, 10.0)
+                img = img.rotate(angle, resample=Image.Resampling.BILINEAR)
+        
         img_arr = np.array(img, dtype=np.float32)
         min_val, max_val = img_arr.min(), img_arr.max()
         if max_val > min_val:
@@ -75,16 +86,16 @@ class MRIClassificationDataset(Dataset):
         else:
             normalized_img = img_arr / 255.0
             
-        tensor = torch.from_numpy(normalized_img).unsqueeze(0) # (1, 256, 256)
+        tensor = torch.from_numpy(normalized_img).unsqueeze(0) # (1, 128, 128)
         return tensor, torch.tensor(label, dtype=torch.long)
 
-def train_classifier(epochs: int = 20, batch_size: int = 8, lr: float = 1e-3):
+def train_classifier(epochs: int = 5, batch_size: int = 128, lr: float = 2e-3):
     os.makedirs("models", exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Training Classifier on device: {device}")
+    print(f"Fast Training Classifier on device: {device} (CPU Threads: {torch.get_num_threads()})")
     
-    train_dataset = MRIClassificationDataset("classification_dataset/train")
-    val_dataset = MRIClassificationDataset("classification_dataset/val")
+    train_dataset = MRIClassificationDataset("classification_dataset/train", augment=True)
+    val_dataset = MRIClassificationDataset("classification_dataset/val", augment=False)
     
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
@@ -93,10 +104,10 @@ def train_classifier(epochs: int = 20, batch_size: int = 8, lr: float = 1e-3):
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     
-    best_val_loss = float('inf')
+    best_val_acc = 0.0
     model_save_path = os.path.join("models", "brain_tumor_classifier_2d.pth")
     
-    print(f"Beginning {epochs}-epoch 2D Multi-Class Classifier training on {len(train_dataset)} samples...")
+    print(f"Beginning Fast Real Kaggle Classifier Training ({epochs} Epochs, Batch Size {batch_size})...")
     start_time = time.time()
     
     for epoch in range(1, epochs + 1):
@@ -135,19 +146,18 @@ def train_classifier(epochs: int = 20, batch_size: int = 8, lr: float = 1e-3):
         val_loss /= len(val_dataset)
         val_acc = (correct_val / len(val_dataset)) * 100.0
         
-        if epoch % 5 == 0 or epoch == epochs:
-            print(f"Epoch [{epoch:02d}/{epochs:02d}] | Train Loss: {train_loss:.4f} (Acc: {train_acc:.1f}%) | Val Loss: {val_loss:.4f} (Acc: {val_acc:.1f}%)")
+        print(f"Epoch [{epoch:02d}/{epochs:02d}] | Train Loss: {train_loss:.4f} (Acc: {train_acc:.2f}%) | Val Loss: {val_loss:.4f} (Acc: {val_acc:.2f}%)")
             
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
             torch.save({
                 'state_dict': model.state_dict(),
                 'classes': CLASSES
             }, model_save_path)
             
     total_time = time.time() - start_time
-    print(f"Classifier training completed in {total_time:.2f} seconds.")
-    print(f"Best Validation Loss: {best_val_loss:.4f}")
+    print(f"\nClassifier training completed in {total_time:.2f} seconds.")
+    print(f"Best Validation Accuracy: {best_val_acc:.2f}%")
     print(f"Saved trained PyTorch Classifier checkpoint to: {model_save_path}")
 
 if __name__ == "__main__":

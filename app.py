@@ -203,12 +203,12 @@ def run_dynamic_pipeline(src):
         cls_info = classify_tumor_2d(tensor, tumor_detected=tumor_detected)
     else:
         cls_info = {
-            "predicted_class": "Invalid Input",
-            "classifier_confidence": None,
+            "tumor_type": "Invalid Input",
+            "confidence": None,
             "confidence_display": "N/A",
-            "all_class_probabilities": {c: 0.0 for c in CLASSES},
-            "classifier_executed": False,
-            "classifier_time_ms": 0.0
+            "raw_probabilities": {c: 0.0 for c in CLASSES},
+            "classifier_called": False,
+            "execution_time_ms": 0.0
         }
         
     metrics = analyze_tumor_metrics(
@@ -350,6 +350,6 @@ with st.expander("🔬 Model Information & Architecture Telemetry (Viva Panel)",
     with v_col2:
         st.markdown(f"**Segmentation Threshold:** `Sigmoid Probability >= {pred_info['prob_threshold']} (Min {pred_info['min_pixel_threshold']} px)`")
         st.markdown(f"**Segmentation Inference Time:** `⚡ {pred_info['execution_time_ms']} ms`")
-        st.markdown(f"**Classifier Inference Time:** `⚡ {cls_info['classifier_time_ms']} ms`")
+        st.markdown(f"**Classifier Inference Time:** `⚡ {cls_info.get('execution_time_ms', cls_info.get('classifier_time_ms', 0.0))} ms`")
         st.markdown(f"**Predicted Tumor Voxels:** `{pred_info['tumor_pixel_count']} pixels`")
-        st.markdown(f"**Pipeline Forward Pass:** `{'UNet + Classifier Executed' if cls_info['classifier_executed'] else 'Skipped / No Tumor'}`")
+        st.markdown(f"**Pipeline Forward Pass:** `{'UNet + Classifier Executed' if cls_info.get('classifier_called', cls_info.get('classifier_executed', False)) else 'Skipped / No Tumor'}`")
